@@ -1,0 +1,28 @@
+{
+    "tasks": [
+        {
+            "type": "process",
+            "label": "CMake: build UDP project",
+            "command": "cmake",
+            "args": [
+                "--build", "${workspaceFolder}/build", "--config", "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "windows": {
+                "command": "powershell",
+                "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/build.ps1"]
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Build the local UDP project; Windows task initializes MSVC and runs tests."
+        }
+    ],
+    "version": "2.0.0"
+}

@@ -1,0 +1,17 @@
+#pragma once
+#include <iostream>
+#include <mutex>
+#include <sstream>
+namespace chat {
+class LogLine {
+public:
+    explicit LogLine(const char* level) { stream_ << '[' << level << "] "; }
+    ~LogLine() { static std::mutex mutex; std::lock_guard<std::mutex> lock(mutex); std::clog << stream_.str() << '\n'; }
+    template<class T> LogLine& operator<<(const T& value) { stream_ << value; return *this; }
+private:
+    std::ostringstream stream_;
+};
+}
+#define LOG_INFO chat::LogLine("INFO")
+#define LOG_ERROR chat::LogLine("ERROR")
+#define LOG_DEBUG chat::LogLine("DEBUG")

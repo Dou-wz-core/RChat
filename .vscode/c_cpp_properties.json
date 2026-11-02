@@ -1,0 +1,12 @@
+{
+    "configurations": [
+        {
+            "name": "Local CMake",
+            "configurationProvider": "ms-vscode.cmake-tools",
+            "includePath": ["${workspaceFolder}/include/**", "${workspaceFolder}/thirdparty"],
+            "cStandard": "c17",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}

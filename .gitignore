@@ -1,0 +1,55 @@
+# Build output and generated files
+/build*/
+/bin/
+/out/
+CMakeFiles/
+CMakeCache.txt
+*.gch
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.log
+
+# Local credentials and environment overrides; publish examples only
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.aws/
+.ssh/
+.codex/
+.agents/
+secrets/
+
+# Local database data and backups (keep schema/migration SQL)
+/db/data/
+/db/backups/
+/mysql-data/
+*.sql.gz
+*.sql.zip
+*.sqlite
+*.sqlite3
+
+# Machine-specific IDE and OS files
+.vs/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
