@@ -2,6 +2,10 @@
 #include "net/reliable_udp.hpp"
 #include "net/udp_node.hpp"
 #include "net/udp_socket.hpp"
+#include "common/settings.hpp"
+#include <filesystem>
+#include <fstream>
+#include <cstdlib>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -14,7 +18,46 @@
 using namespace chat::net;
 using namespace std::string_literals;
 #define CHECK(condition) do { if (!(condition)) throw std::runtime_error(std::string(__func__) + ": " #condition); } while (false)
+void localConfiguration() {
+    const auto file = std::filesystem::current_path() / ("settings-test-" + std::to_string(randomToken()) + ".env");
+    const auto key = "CHAT_TEST_" + std::to_string(randomToken());
+    const auto previous = std::getenv(key.c_str());
+    const bool existed = previous != nullptr;
+    const std::string oldValue = previous ? previous : "";
+    auto set = [&](const std::string& value) {
+#ifdef _WIN32
+        _putenv_s(key.c_str(), value.c_str());
+#else
+        setenv(key.c_str(), value.c_str(), 1);
+#endif
+    };
+    auto cleanup = [&] {
+#ifdef _WIN32
+        _putenv_s(key.c_str(), existed ? oldValue.c_str() : "");
+#else
+        if (existed) setenv(key.c_str(), oldValue.c_str(), 1); else unsetenv(key.c_str());
+#endif
+        std::filesystem::remove(file);
+    };
+    try {
+        { std::ofstream out(file); out << "\xef\xbb\xbf# local test\n" << key << " = \"value # = !\"\r\nCHAT_TEST_EMPTY=\n"; }
+        chat::settings::load(file);
+        CHECK(chat::settings::get(key.c_str()) == "value # = !");
+        CHECK(chat::settings::get("CHAT_TEST_EMPTY", "fallback").empty());
+        set("environment"); CHECK(chat::settings::get(key.c_str()) == "environment");
+        { std::ofstream out(file); out << "PATH=not-allowed\n"; }
+        bool rejected = false;
+        try { chat::settings::load(file); } catch (const std::runtime_error&) { rejected = true; }
+        CHECK(rejected);
+        { std::ofstream out(file); out << key << "='missing end\n"; }
+        rejected = false;
+        try { chat::settings::load(file); } catch (const std::runtime_error&) { rejected = true; }
+        CHECK(rejected);
+    } catch (...) { cleanup(); throw; }
+    cleanup();
+}
 
+// 校验标准 CRC 值、字段字节序、二进制载荷，以及被修改或截断的报文是否遭到拒绝。
 void codec() {
     const std::string reference = "123456789";
     CHECK(crc32(reinterpret_cast<const std::uint8_t*>(reference.data()), reference.size()) == 0xcbf43926u);
@@ -39,7 +82,7 @@ void codec() {
         if (type == PacketType::Ack) control.ack = 1;
         CHECK(decode(encode(control), out) && out.type == type);
     }
-    // Valid CRC is insufficient: reserved flags/type and packet semantics must also pass.
+    // 重新计算 CRC 后仍须拒绝非法版本、类型、保留标志和首部长度。
     for (int offset : {4, 5, 6, 38}) {
         auto invalid = bytes; invalid[static_cast<std::size_t>(offset)] = 255;
         std::fill(invalid.begin() + 40, invalid.begin() + 44, std::uint8_t{0});
@@ -49,6 +92,7 @@ void codec() {
     }
 }
 
+// 用内存队列连接两端状态机，手动推进毫秒时间，稳定复现丢包和重传过程。
 struct Simulation {
     struct Wire { bool toServer; Bytes bytes; };
     Endpoint clientAddress{"127.0.0.1", 41001}, serverAddress{"127.0.0.1", 41002};
@@ -66,16 +110,19 @@ struct Simulation {
             if (blackhole) return;
             Packet p; CHECK(decode(bytes, p));
             auto attempt = seen[{toServer, static_cast<unsigned>(p.type), p.sequence ? p.sequence : p.ack}]++;
+            // 仅丢弃指定报文的第一次发送，覆盖握手应答、数据片和 ACK 的重传路径。
             if (loss && attempt == 0 && (p.type == PacketType::Hello || p.type == PacketType::Welcome ||
                 (p.type == PacketType::Data && p.sequence % 3 == 0) || (p.type == PacketType::Ack && p.ack % 4 == 0))) { ++dropped; return; }
             wire.push_back({toServer, bytes});
             if (loss && p.type == PacketType::Data && p.sequence % 5 == 0) {
+                // 副本插到队首，使重复分片先于原队列中的其他报文到达。
                 wire.push_front({toServer, bytes}); ++duplicates;
             }
         };
         ReliableUdp::Callbacks sc;
         sc.opened = [this](std::uint64_t id, const Endpoint&) { serverId = id; return true; };
         sc.received = [this](std::uint64_t, ReceivedMessage m) {
+            // 主动拒收若干次完整消息，模拟业务队列暂时没有容量。
             if (reject) { --reject; return false; }
             atServer.push_back(std::move(m)); return true;
         };
@@ -89,6 +136,7 @@ struct Simulation {
         client->connect(serverAddress, 1234567, now);
     }
     void advance(unsigned ms) {
+        // 两端共享模拟时钟；每步先处理定时器，再交付排队的数据报。
         for (unsigned i = 0; i < ms; ++i) {
             ++now; client->tick(now); server->tick(now);
             unsigned limit = 1000;
@@ -102,6 +150,7 @@ struct Simulation {
     }
     void handshake() { advance(100); CHECK(clientId && clientId == serverId); }
 };
+// 在丢包、重复和队列顺序变化下，验证 64KiB 分片重组、双向消息关联和顺序交付。
 void reliableDelivery() {
     Simulation link(true); link.handshake();
     std::string large(MaxMessage, 'x');
@@ -115,6 +164,7 @@ void reliableDelivery() {
     CHECK(link.completed == 3 && !link.failed && link.dropped > 0 && link.duplicates > 0);
     CHECK(link.client->queuedBytes() == 0 && link.server->queuedBytes() == 0);
 }
+// 完整消息被拒收后应可重试且只投递一次，发送队列满时拒绝继续入队。
 void backpressureAndLimits() {
     Simulation link; link.handshake(); link.reject = 3;
     CHECK(!link.client->enqueue(link.clientId, ""));
@@ -127,6 +177,7 @@ void backpressureAndLimits() {
     CHECK(!link.client->enqueue(link.clientId, "overflow"));
     link.client->closeAll(); CHECK(link.client->queuedBytes() == 0 && link.failed == 32);
 }
+// 拒绝错误地址、会话号和未来序号，分别检查重传、心跳和握手超时后的关闭结果。
 void peerValidationAndTimeout() {
     Simulation link; link.handshake();
     Packet p; p.session = link.serverId; p.sequence = 1; p.message = 1; p.fragments = 1; p.payload = {'x'};
@@ -142,15 +193,16 @@ void peerValidationAndTimeout() {
     CHECK(!idle.server->sessionCount() && !idle.client->sessionCount());
     Simulation timeout; timeout.blackhole = true; timeout.wire.clear(); timeout.advance(500); CHECK(timeout.closed == 1 && !timeout.clientId);
 }
+// 检查同一消息的分片元数据一致性，以及会话数量、单会话和全局字节数上限。
 void fragmentAndResourceLimits() {
     Simulation link; link.handshake();
     Packet first; first.session = link.serverId; first.sequence = 1; first.message = 1;
     first.fragments = 2; first.replyTo = 99; first.payload.assign(MaxPayload, 'a');
     link.server->input(link.clientAddress, encode(first), link.now);
-    link.server->input(link.clientAddress, encode(first), link.now); // old duplicate cannot append twice
+    link.server->input(link.clientAddress, encode(first), link.now); // 重复的旧分片不能再次追加到组装缓冲。
     Packet last = first; last.sequence = 2; last.fragment = 1; last.payload = {'b'};
     last.fragments = 3; last.payload.assign(MaxPayload, 'b');
-    link.server->input(link.clientAddress, encode(last), link.now); // inconsistent total
+    link.server->input(link.clientAddress, encode(last), link.now); // 后续分片声明的总片数与首片不一致。
     CHECK(link.atServer.empty());
     last.fragments = 2; last.payload = {'b'}; last.replyTo = 100;
     link.server->input(link.clientAddress, encode(last), link.now); CHECK(link.atServer.empty());
@@ -170,11 +222,12 @@ void fragmentAndResourceLimits() {
     }
     CHECK(ids.size() == 2 && server.sessionCount() == 2);
     CHECK(server.enqueue(ids[0], "12345678"));
-    CHECK(!server.enqueue(ids[0], "x")); // per-peer byte cap
-    CHECK(!server.enqueue(ids[1], "123")); // global byte cap
+    CHECK(!server.enqueue(ids[0], "x")); // 该会话的待发字节数已经达到上限。
+    CHECK(!server.enqueue(ids[1], "123")); // 两个会话合计将超过全局待发字节数上限。
     CHECK(server.enqueue(ids[1], "12")); CHECK(server.queuedBytes() == 10);
     server.closeAll(); CHECK(failures == 2 && server.queuedBytes() == 0);
 }
+// 故意不消费服务端事件，填满消息队列后仍应能生成预留的关闭事件。
 void nodeEventBackpressure() {
     TransportConfig config; config.pacingMs = 0;
     UdpNode server(true, {"127.0.0.1", 0}, config);
@@ -193,12 +246,13 @@ void nodeEventBackpressure() {
         client.poll(0); server.poll(0); client.poll(0);
     }
     CHECK(rejected > 0);
-    server.stop(); // close event must still fit even with message queue saturated
+    server.stop(); // 消息队列饱和时，预留槽位仍保证关闭事件可以入队。
     Event event; unsigned count = 0, closed = 0;
     while (server.nextEvent(event)) { ++count; if (event.type == EventType::Closed) ++closed; }
     CHECK(count == 1024 && closed == 1);
     client.stop();
 }
+// 使用真实回环 UDP 和独立网络线程，检查含换行、空字符的长消息及零字节数据报。
 void realSockets() {
     UdpNode server(true, {"127.0.0.1", 0});
     UdpNode client(false, {"127.0.0.1", 0});
@@ -216,6 +270,7 @@ void realSockets() {
             Event event;
             while (client.nextEvent(event, 1)) {
                 if (event.type == EventType::Opened) { connection = event.connection; CHECK(connection->send(payload, [&](bool ok) { delivered = ok; })); }
+                // 测试消费线程负责执行完成回调，网络线程只维护套接字和状态机。
                 if (event.type == EventType::Delivered) event.completion(event.success);
                 if (event.type == EventType::Message) { CHECK(event.message.body == payload && event.message.replyTo == 1); received = true; }
             }
@@ -234,6 +289,7 @@ void realSockets() {
 }
 int main() {
     try {
+        localConfiguration(); std::cout << "PASS local .env parsing, BOM/quotes, validation and environment precedence\n";
         codec(); std::cout << "PASS codec, byte order, CRC and malformed frames\n";
         reliableDelivery(); std::cout << "PASS lost HELLO/WELCOME/DATA/ACK, duplicate/reordered packets, fragmentation and ordering\n";
         backpressureAndLimits(); std::cout << "PASS queue backpressure, size/queue limits and failure cleanup\n";

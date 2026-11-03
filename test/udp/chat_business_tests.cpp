@@ -1,5 +1,5 @@
-// Real ChatServer/ChatService and real UDP; in-memory models replace only MySQL I/O.
-// All accounts and passwords below are synthetic test fixtures, never real credentials.
+// 使用真实 ChatServer、ChatService 和 UDP 通信，仅以容器实现替代 MySQL 读写。
+// 用户、好友、群成员和离线消息保存在本测试进程内，用于检查业务状态变化。
 #include "chatserver.hpp"
 #include "chatservice.hpp"
 #include <algorithm>
@@ -18,6 +18,7 @@ std::set<std::pair<int, int>> friends;
 std::uint64_t offlineId = 0;
 int groupId = 0;
 }
+// 提供与数据库模型相同的接口，使业务代码无需判断当前是否处于测试环境。
 bool UserModel::insert(User& user) { user.setId(static_cast<int>(users.size() + 1)); users[user.getId()] = user; return true; }
 User UserModel::query(int id) { auto it = users.find(id); return it == users.end() ? User{} : it->second; }
 bool UserModel::updateState(User user) { users[user.getId()] = user; return true; }
@@ -39,6 +40,7 @@ bool OfflineMsgModel::acknowledge(int user, const std::vector<std::uint64_t>& id
     }), messages.end()); return true;
 }
 
+// 保存每条响应的 replyTo，区分请求响应和其他客户端发来的主动消息。
 struct Client {
     struct Reply { std::uint32_t to; json body; };
     UdpNode node{false, {"127.0.0.1", 0}};
@@ -55,12 +57,14 @@ struct Client {
     }
 };
 std::vector<Client*> clients;
+// 持续轮询两个客户端直到条件满足，超时后让断言失败，避免测试无限等待。
 template<class Predicate> void until(Predicate predicate) {
     auto deadline = monotonicMs() + 5000;
     while (!predicate() && monotonicMs() < deadline) for (auto client : clients) client->poll();
     CHECK(predicate());
 }
 json request(Client& client, json body) {
+    // 每次发送成功都会分配递增消息号，按同一编号寻找对应响应。
     const auto id = ++client.sequence;
     CHECK(client.connection->send(body.dump()));
     auto found = [&] { return std::find_if(client.replies.begin(), client.replies.end(), [&](const Client::Reply& r) { return r.to == id; }); };
@@ -69,6 +73,7 @@ json request(Client& client, json body) {
 }
 
 void businessIntegration() {
+    // 服务端独立运行，测试线程驱动两个客户端完成真实请求和消息转发。
     ChatServer server({"127.0.0.1", 0});
     volatile std::sig_atomic_t running = 1;
     std::exception_ptr failure;
@@ -77,13 +82,14 @@ void businessIntegration() {
         Client alice, bob; clients = {&alice, &bob};
         alice.node.connect(server.localEndpoint()); bob.node.connect(server.localEndpoint());
         until([&] { return alice.connection && bob.connection; });
+        // 未登录不能聊天；登录后也不能通过请求中的 id 冒充另一用户。
         CHECK(request(alice, {{"msgid", ONE_CHAT_MSG}, {"to", 2}})["errno"] == 1);
         const int a = request(alice, {{"msgid", REG_MSG}, {"name", "alice"}, {"password", "test"}})["id"];
         const int b = request(bob, {{"msgid", REG_MSG}, {"name", "bob"}, {"password", "test"}})["id"];
         CHECK(request(alice, {{"msgid", LOGIN_MSG}, {"id", a}, {"password", "test"}})["errno"] == 0);
         CHECK(request(bob, {{"msgid", LOGIN_MSG}, {"id", b}, {"password", "test"}})["errno"] == 0);
         CHECK(request(alice, {{"msgid", ONE_CHAT_MSG}, {"id", b}, {"to", b}, {"msg", "spoof"}})["errno"] == 1);
-        const std::string text(6000, 'x'); // actually fragmented through the chat adapter
+        const std::string text(6000, 'x'); // 超过单个数据报容量，经分片重组后再交给聊天业务。
         CHECK(request(alice, {{"msgid", ONE_CHAT_MSG}, {"to", b}, {"msg", text}})["status"] == "queued");
         until([&] { return !bob.replies.empty(); });
         CHECK(bob.replies.back().body["msg"] == text && bob.replies.back().body["id"] == a);
@@ -93,6 +99,7 @@ void businessIntegration() {
         CHECK(request(bob, {{"msgid", ADD_GROUP_MSG}, {"groupid", group}})["errno"] == 0);
         CHECK(request(alice, {{"msgid", GROUP_CHAT_MSG}, {"groupid", group}, {"msg", "group"}})["errno"] == 0);
         until([&] { return !bob.replies.empty(); }); CHECK(bob.replies.back().body["msg"] == "group"); bob.replies.clear();
+        // 接收者退出登录后消息落入离线收件箱，重新登录获取并确认首批消息。
         CHECK(request(bob, {{"msgid", LOGOUT_MSG}})["errno"] == 0);
         CHECK(request(alice, {{"msgid", ONE_CHAT_MSG}, {"to", b}, {"msg", "offline"}})["status"] == "stored");
         auto login = request(bob, {{"msgid", LOGIN_MSG}, {"id", b}, {"password", "test"}});
@@ -100,6 +107,7 @@ void businessIntegration() {
         CHECK(json::parse(login["offlinemsg"][0].get<std::string>())["msg"] == "offline");
         auto batch = request(bob, {{"msgid", OFFLINE_PULL_MSG}});
         CHECK(batch["errno"] == 0 && batch["offlinemsg"].empty());
+        // 检查未知业务类型、错误字段类型、整数越界和过深 JSON 都返回错误响应。
         CHECK(request(alice, {{"msgid", 999}})["errno"] == 1);
         CHECK(request(alice, {{"msgid", "bad"}})["errno"] == 1);
         CHECK(request(alice, {{"msgid", ONE_CHAT_MSG}, {"to", 9223372036854775807LL}})["errno"] == 1);
@@ -114,7 +122,7 @@ void businessIntegration() {
     } catch (...) { server.stop(); if (service.joinable()) service.join(); throw; }
 }
 
-// Confirmed snapshot deletion must not erase messages arriving after a login query.
+// 手动保存并触发完成回调，精确控制离线批次确认成功、失败和入队拒绝的时机。
 struct ControlledConnection : Connection {
     std::vector<DeliveryCallback> callbacks;
     std::vector<json> responses;
@@ -134,9 +142,11 @@ void offlineAcknowledgments() {
     json login = {{"id", 50}, {"password", "test"}};
     service->login(connection, login, {});
     CHECK(inbox[50].size() == 1 && connection->callbacks.size() == 1);
+    // 查询后新增的消息不属于已发送快照，旧批次确认只能删除旧消息。
     model.insert(50, "new"); connection->callbacks[0](true);
     CHECK(inbox[50].size() == 1 && inbox[50][0].body == "new");
     json pull; service->pullOffline(connection, pull, {});
+    // 传输失败保留原记录；登录响应无法入队时，还要撤销会话身份和在线状态。
     connection->callbacks.back()(false); CHECK(inbox[50].size() == 1);
     service->clientClose(connection);
     connection->accept = false; service->login(connection, login, {});

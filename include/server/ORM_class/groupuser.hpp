@@ -19,4 +19,4 @@ private:
 };
 
 
-#endif // GROUPUSER_H
+#endif // 群成员对象头文件保护

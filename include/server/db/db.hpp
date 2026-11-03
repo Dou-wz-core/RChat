@@ -17,13 +17,14 @@ public:
     // 释放数据库连接资源
     ~MySQL();
     // 连接数据库
-    bool connect();
+    bool connect(bool reportErrors = true);
     // 更新操作
     bool update(string sql);
     // 查询操作
     MYSQL_RES *query(string sql);
     // 获取连接
     MYSQL* getConnection();
+    // 按已建立连接的字符集转义 SQL 字符串内容，调用方仍需添加字符串引号。
     std::string escape(const std::string& value);
 private:
     MYSQL *_conn;

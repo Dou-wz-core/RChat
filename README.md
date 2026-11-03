@@ -4,6 +4,40 @@
 
 先读 [改造设计与解耦计划](docs/UDP_DESIGN.md)，再读 [完整协议规范](docs/UDP_PROTOCOL.md)。
 
+## 本机直接演示
+
+首次克隆后，先运行 `./scripts/build.ps1 -PrepareDemo`，自动准备演示数据库、生成本机 `.env` 并构建测试；需要已安装 Windows C++ 工具链和 MySQL Server（详见下方构建说明）。仓库仅提供 `.env.example`，真实数据库凭据在本机生成。项目演示数据库使用 `127.0.0.1:3307`、数据目录 `db/data`；UDP 服务使用 `127.0.0.1:6000`。不使用 VMware 或原有 MySQL 实例。
+
+在项目目录打开三个终端，分别运行：
+
+```powershell
+./build/src/server/ChatServer.exe
+```
+
+```powershell
+./build/UdpClient.exe --demo alice
+```
+
+```powershell
+./build/UdpClient.exe --demo bob
+```
+
+Alice/Bob 自动登录，直接输入文字发给对方。`/all 文字` 发群聊，`/to bob 文字` 指定接收者，`/offline` 拉取离线消息，`/quit` 注销退出。也可直接运行 `UdpClient.exe`，按提示输入 1 或 2 选择账号。演示账号为 Alice（ID 1）、Bob（ID 2），聊天密码均为 `demo123456`，客户端已经自动填写。两人已互为好友并加入群组 1。
+
+完成准备后，Windows 服务端会自动启动**已经准备好的项目演示 MySQL**，无需每次手工启动数据库。准备脚本生成 `.env`，构建时将其复制到可执行文件旁；进程环境变量仍优先于文件。数据库随机密码及管理凭据保存在被忽略的 `.env`、`.local` 中。Alice/Bob 的聊天密码仅用于本地演示，不是数据库凭据。
+
+VS Code 的“运行任务”提供 `Demo: server`、`Demo: Alice`、`Demo: Bob`，可在三个终端面板中演示。
+
+首次准备或重新编译演示版本：
+
+```powershell
+./scripts/build.ps1 -PrepareDemo
+```
+
+这个命令会幂等地初始化/启动项目数据库、生成本地配置、构建并运行测试。已有演示消息保留。`scripts/start-server.ps1` 也可以检查数据库后运行服务端；停止服务端后，可运行 `scripts/stop-demo-db.ps1` 关闭项目数据库，数据不会被删除。自动拉起功能只对本机 Windows 演示配置启用；自行使用其他数据库时设置 `CHAT_DEMO_AUTOSTART=0`。
+
+自动验证真实双客户端演示（PowerShell 7）：`./scripts/test-demo.ps1`。测试结束会关闭测试服务端和客户端，保留演示数据库供直接使用。
+
 ```mermaid
 flowchart LR
     A[UDP Socket] --> B[协议校验与会话 ARQ]
@@ -77,7 +111,7 @@ ctest --test-dir build --output-on-failure
 2. 设置以下环境变量；默认主机 `127.0.0.1`、端口 `3306`、用户 `root`、数据库 `chat_udp`，默认密码为空。
 3. 运行完整服务端。数据库不可用时明确报错退出。
 
-配置字段参见 [`.env.example`](.env.example)，其中用户名和密码均为示例，请替换为你本地数据库的实际值。程序读取进程环境变量，**不会自动加载 `.env` 文件**；可用下列命令设置。真实凭据只保存在本地环境或被 Git 忽略的 `.env` 中，不要写入源码或提交到仓库。
+配置字段参见 [`.env.example`](.env.example)。程序会自动加载当前目录或 exe 旁的 `.env`，进程环境变量优先。上述本机演示通过准备脚本自动配置；以下手动步骤用于自行配置数据库。真实凭据保存在被 Git 忽略的 `.env`、`.local` 中。
 
 ```powershell
 $env:CHAT_DB_HOST = '127.0.0.1'

@@ -25,6 +25,7 @@ ChatService* ChatService::instance()
 // 注册消息以及绑定对应的Handler回调操作
 ChatService::ChatService()
 {
+    // 启动时清除上次运行留下的在线状态；数据库初始化失败则终止服务启动。
     if (!_userModel.resetState())
     {
         throw std::runtime_error("database unavailable or schema missing; check CHAT_DB_* and db/schema.sql");
@@ -103,6 +104,7 @@ void ChatService::login(const ConnectionPtr& conn, json& request, RequestContext
             lock_guard<mutex> lock(_userConnMapMutex);
             _userConnMap[user.getId()] = conn;
         }
+        // 账号状态更新成功后绑定会话身份，后续请求由入口统一补充和核对发送者。
         conn->bindUser(id);
 
         // 发送登录成功的响应消息，栈上json对象隔离，会在函数返回时自动销毁
@@ -130,6 +132,7 @@ void ChatService::login(const ConnectionPtr& conn, json& request, RequestContext
         }
 
         // 发送登录成功的响应消息给客户端
+        // 登录响应同时携带首批离线消息；无法进入发送队列时撤销本次登录状态。
         if (!sendOffline(conn, std::move(js), id, context)) clientClose(conn);
     }
     else
@@ -309,6 +312,7 @@ void ChatService::oneChat(const ConnectionPtr& conn, json& js, RequestContext co
 
     // toid在线，转发消息
     const auto payload = js.dump();
+    // 入队成功先返回受理结果；若随后重传失败或会话关闭，再由完成回调保存离线副本。
     if (targetConn && targetConn->send(payload, [this, toid, payload](bool delivered) {
         if (!delivered && !_offlineMsgModel.insert(toid, payload)) LOG_ERROR << "failed to persist undelivered chat";
     }))
@@ -414,6 +418,7 @@ void ChatService::groupChat(const ConnectionPtr& conn, json& js, RequestContext 
             
         // 成员在线，转发消息
         const auto payload = js.dump();
+        // 每个成员各自跟踪发送结果，某个会话失败时只为该成员补存离线消息。
         const bool queued = targetConn && targetConn->send(payload, [this, id, payload](bool delivered) {
             if (!delivered && !_offlineMsgModel.insert(id, payload)) LOG_ERROR << "failed to persist undelivered group message";
         });
@@ -432,18 +437,23 @@ void ChatService::groupChat(const ConnectionPtr& conn, json& js, RequestContext 
 
 bool ChatService::sendOffline(const ConnectionPtr& conn, json response, int userid, RequestContext context)
 {
+    // 同一用户一次只允许一个待确认批次，避免并行查询并重复发送相同的记录。
     if (_offlineInFlight.count(userid)) {
         sendError(conn, context, OFFLINE_BATCH_MSG, "上一批离线消息尚未确认，请稍后再试"); return false;
     }
+    // 查询得到稳定的主键快照，之后新增的离线消息不会被本批确认误删。
     auto pending = _offlineMsgModel.queryPending(userid);
     vector<std::uint64_t> ids;
     response["offlinemsg"] = json::array();
     std::size_t budget = 0;
     for (const auto& message : pending) {
+        // 消息体作为 JSON 字符串嵌入响应，按转义后的大小计算 32KiB 批次预算。
+        // 剩余空间用于登录信息和其他字段，整份响应随后还要校验 64KiB 上限。
         const auto encodedSize = json(message.body).dump().size();
         if (budget + encodedSize > 32 * 1024) break;
         response["offlinemsg"].push_back(message.body); ids.push_back(message.id); budget += encodedSize;
     }
+    // 查询最多取 50 条；刚好达到上限时，提示客户端继续拉取以确认是否还有记录。
     response["offline_more"] = ids.size() < pending.size() || pending.size() == 50;
     if (!pending.empty() && ids.empty()) {
         sendError(conn, context, OFFLINE_BATCH_MSG, "离线消息超出当前业务批次限制"); return false;
@@ -452,12 +462,16 @@ bool ChatService::sendOffline(const ConnectionPtr& conn, json response, int user
     if (payload.size() > chat::net::MaxMessage) {
         sendError(conn, context, ERROR_MSG, "响应超出64KiB限制"); return false;
     }
+    // 空批次无需登记确认状态，也没有需要在完成后删除的数据库记录。
     if (ids.empty()) return conn->send(std::move(payload), {}, context.messageId);
     _offlineInFlight.emplace(userid, true);
     if (conn->send(std::move(payload), [this, userid, ids](bool delivered) {
+        // 成功和失败都会解除批次占用；只有全部分片获确认才删除快照内的记录。
+        // 确认删除失败时保留消息，后续拉取可能重复收到这一批。
         _offlineInFlight.erase(userid);
         if (delivered && !_offlineMsgModel.acknowledge(userid, ids)) LOG_ERROR << "offline acknowledgment failed; messages retained";
     }, context.messageId)) return true;
+    // 入队失败不会触发完成回调，在这里归还批次状态，数据库记录继续保留。
     _offlineInFlight.erase(userid); return false;
 }
 void ChatService::pullOffline(const ConnectionPtr& conn, json&, RequestContext context)

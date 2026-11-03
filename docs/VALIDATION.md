@@ -1,5 +1,20 @@
 # 本地验证记录
 
+## 可直接运行的本机演示追加验证
+
+本机 `.env` 已填入独立演示数据库的实际连接配置，真实数据库密码不在版本化源码中。项目数据库使用 127.0.0.1:3307 和 db/data，Alice（1）/Bob（2）的聊天密码为 demo123456，客户端会自动登录。UDP 使用 127.0.0.1:6000。
+
+- Windows PowerShell 5（VS Code 默认任务实际使用的版本）执行 `scripts/build.ps1 -PrepareDemo` 成功，CTest 2/2 通过；包括新增 .env BOM、引号、空值、非法键和环境变量优先级验证。
+- `scripts/test-demo.ps1` 使用真实服务端、真实演示 MySQL 和两个真实客户端，通过默认账号菜单、自动登录、中文/emoji 双向聊天、群聊、注销、离线消息存储与再次登录回放。测试进程正常清理，数据库保留供演示。
+- 通过 `scripts/stop-demo-db.ps1` 关闭项目数据库后，直接启动 ChatServer.exe 自动拉起同一数据目录的 MySQL，再次通过完整双客户端演示；不依赖提前导出的数据库环境变量。
+- 服务端和客户端 exe 旁均已复制 .env；自动启动和数据库管理脚本只操作带有项目所有权记录的数据目录。
+- 私有配置、管理凭据和持久数据库文件分别在 .env、.local、db/data，均已验证被 Git 忽略。没有访问 VMware 或现有 MySQL 3306 实例。
+- 修正了本机中文 MSVC `/utf-8` 输出前缀与 CMake/Ninja 字节编码不一致造成的头文件依赖丢失。构建脚本使用同选项探测原始前缀并修正生成规则，实际头文件依赖已恢复记录。
+
+当前演示启动方式见 [README 的本机直接演示](../README.md#本机直接演示)。详细日志位于 .local/demo-smoke.log、.local/demo-cold-start.log 和 build/vscode-demo-build.log。
+
+## 原 UDP 改造验证
+
 日期：2026-11-02。平台：Windows x64，MSVC 19.51.36260，C++17，MySQL 8.0.46。没有向 VMware 项目写入文件，构建、运行和临时数据均在本地进行。
 
 | 验证项 | 结果与证据 |

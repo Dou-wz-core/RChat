@@ -22,4 +22,4 @@ public:
 };
 
 
-#endif // GROUPMODEL_H
+#endif // 群组数据模型头文件保护

@@ -33,7 +33,7 @@ class ChatServer
 public:
     // 明确TcpServer构造函数需要什么参数，输出ChatServer的构造函数
     ChatServer(muduo::net::EventLoop* loop,     // 事件循环对象
-               const muduo::net::InetAddress& listenAddr,   // IP + Port
+               const muduo::net::InetAddress& listenAddr,   // 监听地址和端口
                const string& nameArg)   // 服务器名字
         : _loop(loop),
           _server(loop, listenAddr, nameArg)
@@ -103,7 +103,7 @@ int main()
     ChatServer server(&loop, addr, "ChatServer");
 
     // 3.启动服务器
-    server.start(); // listenfd epoll_ctl => epoll
+    server.start(); // 开始监听，并将监听描述符注册到 epoll 事件循环。
 
     // 4.启动事件循环
     loop.loop();    // epoll_wait以阻塞方式等待新用户连接、已连接用户的读写事件等

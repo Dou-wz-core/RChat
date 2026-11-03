@@ -12,7 +12,7 @@
             },
             "windows": {
                 "command": "powershell",
-                "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/build.ps1"]
+                "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/build.ps1", "-PrepareDemo"]
             },
             "problemMatcher": [
                 "$gcc"
@@ -22,6 +22,33 @@
                 "isDefault": true
             },
             "detail": "Build the local UDP project; Windows task initializes MSVC and runs tests."
+        },
+        {
+            "label": "Demo: server",
+            "type": "process",
+            "command": "powershell",
+            "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/start-server.ps1"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "problemMatcher": [],
+            "presentation": {"group": "udp-demo", "panel": "dedicated", "reveal": "always"}
+        },
+        {
+            "label": "Demo: Alice",
+            "type": "process",
+            "command": "${workspaceFolder}/build/UdpClient.exe",
+            "args": ["--demo", "alice"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "problemMatcher": [],
+            "presentation": {"group": "udp-demo", "panel": "dedicated", "reveal": "always"}
+        },
+        {
+            "label": "Demo: Bob",
+            "type": "process",
+            "command": "${workspaceFolder}/build/UdpClient.exe",
+            "args": ["--demo", "bob"],
+            "options": {"cwd": "${workspaceFolder}"},
+            "problemMatcher": [],
+            "presentation": {"group": "udp-demo", "panel": "dedicated", "reveal": "always"}
         }
     ],
     "version": "2.0.0"

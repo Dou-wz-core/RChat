@@ -13,6 +13,7 @@ bool UserModel::insert(User &user)
     MySQL mysql;
     if (mysql.connect())
     {
+        // 用户提供的字符串按当前连接字符集转义，动态 SQL 不受固定缓冲区长度限制。
         const auto sql = "INSERT INTO `User`(name,password,state) VALUES('" + mysql.escape(user.getName()) +
             "','" + mysql.escape(user.getsPwd()) + "','" + mysql.escape(user.getState()) + "')";
         if (mysql.update(sql))

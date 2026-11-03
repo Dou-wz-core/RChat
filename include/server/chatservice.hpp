@@ -57,6 +57,7 @@ public:
     void addGroup(const ConnectionPtr& conn, json& js, RequestContext context);
     // 群组聊天业务
     void groupChat(const ConnectionPtr& conn, json& js, RequestContext context);
+    // 拉取下一批离线消息；上一批尚未确认时拒绝重复拉取。
     void pullOffline(const ConnectionPtr& conn, json& js, RequestContext context);
 
 
@@ -68,7 +69,9 @@ private:
     unordered_map<int, ConnectionPtr> _userConnMap;
     // 互斥锁，保证_userConnMap的线程安全
     mutex _userConnMapMutex;
+    // 记录正在等待传输确认的离线批次，由业务事件线程串行读写。
     std::unordered_map<int, bool> _offlineInFlight;
+    // 将响应与离线消息一起发送，确认后只删除本批记录的消息主键。
     bool sendOffline(const ConnectionPtr& conn, json response, int userid, RequestContext context);
     
     ChatService();

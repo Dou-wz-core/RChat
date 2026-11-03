@@ -2,7 +2,7 @@
 
 ## 目标与解耦
 
-本地项目改为 C++17 自封装 UDP 通信；不写入原 VMware 项目。保留 JSON 业务体、`EnMsgType`、Handler 注册方式和 MySQL/ORM 业务模型。
+本地项目改为 C++17 自封装 UDP 通信；保留 JSON 业务体、`EnMsgType`、Handler 注册方式和 MySQL/ORM 业务模型。
 
 原耦合点：
 

@@ -10,6 +10,7 @@ bool GroupModel::createGroup(Group &group)
     MySQL mysql;
     if (mysql.connect())
     {
+        // 群名和描述在拼接前分别转义，保留引号等字符的原始内容。
         const auto sql = "INSERT INTO AllGroup(name,description) VALUES('" + mysql.escape(group.getName()) +
             "','" + mysql.escape(group.getDesc()) + "')";
         // 3.执行sql语句

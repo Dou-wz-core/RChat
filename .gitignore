@@ -1,4 +1,4 @@
-# Build output and generated files
+# 编译输出目录、构建缓存和生成的二进制文件
 /build*/
 /bin/
 /out/
@@ -19,7 +19,8 @@ CMakeCache.txt
 *.exp
 *.log
 
-# Local credentials and environment overrides; publish examples only
+# 环境配置与密钥文件，其中 .env.example 通过例外规则保留
+/.local/
 .env
 .env.*
 !.env.example
@@ -37,7 +38,7 @@ id_ed25519*
 .agents/
 secrets/
 
-# Local database data and backups (keep schema/migration SQL)
+# 数据库运行数据与备份文件，建表和表结构修改脚本仍保留
 /db/data/
 /db/backups/
 /mysql-data/
@@ -46,7 +47,7 @@ secrets/
 *.sqlite
 *.sqlite3
 
-# Machine-specific IDE and OS files
+# 编辑器个人配置与操作系统生成的辅助文件
 .vs/
 .idea/
 *.user

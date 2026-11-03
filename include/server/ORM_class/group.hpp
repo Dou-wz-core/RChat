@@ -31,4 +31,4 @@ private:
     vector<GroupUser> _users; // 群组成员列表
 };
 
-#endif // GROUP_HPP
+#endif // 群组对象头文件保护

@@ -2,7 +2,8 @@
 #include "net/udp_node.hpp"
 #include <csignal>
 
-// UDP transport owns sockets/timers. This adapter only validates and dispatches JSON.
+// 接收完整的传输消息，校验 JSON 字段和会话身份，再按 msgid 分发业务。
+// 网络线程维护套接字和定时器，事件消费线程串行执行聊天业务与数据库操作。
 class ChatServer {
 public:
     explicit ChatServer(chat::net::Endpoint local);
